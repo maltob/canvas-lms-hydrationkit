@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from faker import Faker
 import random
 import csv
@@ -269,6 +270,11 @@ with open(("api_data/user_profiles.csv"), newline='') as f:
     for profile in list(reader):
         user_profiles[profile["user_id"]] = profile
 
+with open(("data/courses.csv"), newline='') as f:
+    reader = csv.DictReader(f)
+    for course in list(reader):
+        courses.append(course)
+
 for user in users:
     if user["user_id"] not in user_profiles.keys():
         age = random.randint(17,random.randint(22,random.randint(25,80)))
@@ -278,11 +284,13 @@ for user in users:
             action = "taught"
             age = random.randint(24,random.randint(40,80))
         #Get other courses or they'll all seem to like Computer Science
-        user_course_enrollments = ""
+        user_course_enrollments = []
         for enroll in user_enrollments:
-            user_course_enrollments = user_course_enrollments+" and "+course_map[enroll]['long_name']
-        bio_resp = ollama.generate("phi3",f"You are {user['first_name']} {user['last_name']} and your pronouns are {user['pronoun']}. You are a {age} {user['declared_user_type']} currently at {university_name}. You are {action} courses here including the courses {user_courses}. Please write a short paragraph about yourself but do not mention the specific courses you are in, include your hobbies. Do not mention the prompt,  that you are an AI, or any other notes.")
-        user_profiles[user['user_id']] = {"user_id":user['user_id'], "bio":bio_resp['response'], "age":age, "first":user['last_name'],"last":user['last_name'], "pronouns":user['pronoun'],"declared_user_type":user['declared_user_type']}
+            ctitle = course_map[enroll]['long_name'].split(" - ")[1]
+            user_course_enrollments.append(ctitle)
+        #The AI focused too much on the courses 
+        bio_resp = ollama.generate("phi3",f"You are {user['first_name']} {user['last_name']} and your pronouns are {user['pronoun']} who is a {age} {user['declared_user_type']} currently at {university_name}. You are {action} courses here, your favorite is {user_course_enrollments[random.randint(0,len(user_course_enrollments)-1)]}.  The job of a {fake.job()}.  Please write a short paragraph about yourself including hobbies.")
+        user_profiles[user['user_id']] = {"user_id":user['user_id'], "bio":bio_resp['response'], "age":age, "first":user['first_name'],"last":user['last_name'], "pronouns":user['pronoun'],"declared_user_type":user['declared_user_type']}
     #Save every 20 user profiles
     if len(user_profiles) % 20 == 0:
         print(f"Saving profiles at {len(user_profiles)} generated.")
@@ -290,4 +298,64 @@ for user in users:
             writer = csv.DictWriter(file, fieldnames=["user_id", "age","first", "last", "pronouns", "declared_user_type","bio"])
             writer.writeheader()
             for entry in user_profiles:
-                writer.writerow(user_profiles[entry])
+                _ = writer.writerow(user_profiles[entry])
+#Save out all
+with open('api_data/user_profiles.csv', mode='w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=["user_id", "age","first", "last", "pronouns", "declared_user_type","bio"])
+            writer.writeheader()
+            for entry in user_profiles:
+                _ = writer.writerow(user_profiles[entry])
+
+#Generate a few discussions per course
+course_discussions = []
+generated_discussion_ids = []
+with open(("api_data/course_discussions.csv"), newline='') as f:
+    reader = csv.DictReader(f)
+    for course_d in list(reader):
+        generated_discussion_ids.append(course_d['course_id'])
+        course_discussions.append(course_d)
+
+for course in courses:
+    if course["course_id"] not in generated_discussion_ids:
+        discussion_int = random.randint(0,8)
+        if discussion_int > 0:
+            resp = ollama.generate('phi3',f'Generate {discussion_int} discussion topics for a LMS course about {course["long_name"].split(" - ")[1]} with a topic name and an initial prompt for students to answer as valid json without markdown. Use the keys of "topics" as the root key then "topic_name" and "initial_prompt" for each discussion ')['response']
+            arr = None
+            while(arr == None):
+                try:
+                    arr = json.loads(resp)['topics']
+                    for item in arr:
+                        course_discussions.append({
+                            'course_id': course['course_id'],
+                            'discussion_topic_title': item['topic_name'],
+                            'discussion_topic_prompt': item['initial_prompt'],
+                        })
+                except:
+                    print(f"Ollama failed to generate valid JSON for {course['course_id']}. Retrying")
+                    resp = ollama.generate('phi3',f'Generate 3 discussion topics for a LMS course about {course["long_name"].split(" - ")[1]} with a topic name and an initial prompt for students to answer as valid json without markdown.  Use the keys of "topics" as the root key then "topic_name" and "initial_prompt" for each discussion')['response']
+            generated_discussion_ids.append(course['course_id'])
+        else:
+            generated_discussion_ids.append(course['course_id'])
+        if len(generated_discussion_ids) % 5 == 0:
+            print(f"Saving discussions at {len(generated_discussion_ids)} courses generated.")
+            with open('api_data/course_discussions.csv', mode='w', newline='') as file:
+                writer = csv.DictWriter(file, fieldnames=["course_id", "discussion_topic_title","discussion_topic_prompt"])
+                writer.writeheader()
+                for entry in course_discussions:
+                    _ = writer.writerow(entry)
+
+with open('api_data/course_discussions.csv', mode='w', newline='') as file: 
+                writer = csv.DictWriter(file, fieldnames=["course_id", "discussion_topic_title","discussion_topic_prompt"])
+                writer.writeheader()
+                for entry in course_discussions:
+                    _ = writer.writerow(entry)
+
+#Generate a few quizzes per course
+
+#Generate several pages per course
+
+#Generate a few assignments per course
+
+#Generate responses to each assignment for each student
+
+#Generate profile pictures using SD?
