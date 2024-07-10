@@ -252,28 +252,41 @@ user_profiles = {}
 
 if not users:
     users = []
-    with open(("data/users.csv"), newline='') as f:
-       reader = csv.DictReader(f)
-       users += list(reader)
-    user_courses = {}
+with open(("data/users.csv"), newline='') as f:
+    reader = csv.DictReader(f)
+    users += list(reader)
+user_courses = {}
     #Probably need to reload the users and enrollments from the enrollment file
-    with open('data/enrollments.csv', mode='r', newline='') as file:
-        reader = csv.DictReader(file)
-        for enrollment in list(reader):
-            if enrollment["user_id"] not in user_courses.keys():
-                user_courses[enrollment["user_id"]] = []
-            user_courses[enrollment["user_id"]].append((section_map[enrollment["section_id"]]))
-            #print(section_map[enrollment["section_id"]])
-
+with open('data/enrollments.csv', mode='r', newline='') as file:
+    reader = csv.DictReader(file)
+    for enrollment in list(reader):
+        if enrollment["user_id"] not in user_courses.keys():
+            user_courses[enrollment["user_id"]] = []
+        user_courses[enrollment["user_id"]].append((section_map[enrollment["section_id"]]))
+        #print(section_map[enrollment["section_id"]])
+sections = []
+courses = []
+enrollments = []
 with open(("api_data/user_profiles.csv"), newline='') as f:
     reader = csv.DictReader(f)
     for profile in list(reader):
         user_profiles[profile["user_id"]] = profile
 
+with open(("data/sections.csv"), newline='') as f:
+    reader = csv.DictReader(f)
+    for sect in list(reader):
+        sections.append(sect)
+
 with open(("data/courses.csv"), newline='') as f:
     reader = csv.DictReader(f)
     for course in list(reader):
         courses.append(course)
+
+
+with open(("data/enrollments.csv"), newline='') as f:
+    reader = csv.DictReader(f)
+    for enrollment in list(reader):
+        enrollments.append(enrollment)
 
 for user in users:
     if user["user_id"] not in user_profiles.keys():
@@ -350,8 +363,168 @@ with open('api_data/course_discussions.csv', mode='w', newline='') as file:
                 for entry in course_discussions:
                     _ = writer.writerow(entry)
 
-#Generate a few quizzes per course
+#Generate a few responses to the above discussions
+discussion_responses = []
+responded_discussions = []
 
+user_map = {}
+for user in user_profiles:
+    user_map[user] = user_profiles[user]
+
+enrollment_user_map = {}
+for enrollment in enrollments:
+    enrollment_user_map[enrollment['user_id']+''+section_map[enrollment['section_id']]] = user_map[enrollment['user_id']]
+
+with open(("api_data/course_discussions_responses.csv"), newline='') as f:
+    reader = csv.DictReader(f)
+    for discussion in list(reader):
+        responded_discussions.append(discussion['course_id']+discussion['discussion_topic_title'])
+        discussion_responses.append(discussion)
+
+
+for discussion in course_discussions:
+    disc_key = discussion['course_id']+discussion['discussion_topic_title']
+    if disc_key not in responded_discussions:
+        course = course_map[discussion['course_id']]
+        #Pretend 2024 Winter is in the future, students wouldn't be able to take a test in Test or Teaching so lets not let them respond to those
+        if course['term_id'] not in ['2024Winter','Test', 'Teaching']:
+            generate = True
+            if course['term_id'] == '2024NonCredit':
+                #Lets only have some discussions have responses in the 2024NonCredit term
+                generate = random.randint(1,5) == 2
+            if generate:
+                #We'll feed this into faker to speed up generation
+                oresp = ollama.generate('phi3',f'Generate a one to three paragraph response to follow essay question "{discussion["discussion_topic_prompt"]}".')
+                word_list = None
+                if oresp['done']:
+                    word_list = oresp['response'].split(" ")
+                course_enrollments = []
+                for enrollment in enrollments:
+                    if course['course_id'] == section_map[enrollment['section_id']] and enrollment['role'] == 'student':
+                        userp = user_profiles[enrollment['user_id']]
+                        # AI Takes too long for this, just use faker unless requested to AI generate it
+                        if os.environ.get('USEOLLAMA_FULL'):
+                            oresp = ollama.generate('phi3',f' {userp["first"]}, generate a one to two paragraph response to follow essay question "{discussion["discussion_topic_prompt"]}".')
+                            if oresp['done']:
+                                resp = oresp['response']
+                                discussion_responses.append({'course_id':course['course_id'],'discussion_topic_title':discussion["discussion_topic_title"],'user_id':enrollment['user_id'],'response':resp})
+                            else:
+                                print('Failed to generate a response')
+                        else:
+                            resp = fake.paragraph(nb_sentences=12,variable_nb_sentences=True,ext_word_list=(word_list))
+                            discussion_responses.append({'course_id':course['course_id'],'discussion_topic_title':discussion["discussion_topic_title"],'user_id':enrollment['user_id'],'response':resp})
+                        
+            responded_discussions.append(disc_key)
+            if len(responded_discussions) % 5 == 0:
+                print(f'Saving at {len(responded_discussions)} out of {len(course_discussions)}')
+                with open('api_data/course_discussions_responses.csv', mode='w', newline='') as file: 
+                    writer = csv.DictWriter(file, fieldnames=["course_id", "discussion_topic_title","user_id","response"])
+                    writer.writeheader()
+                    for entry in discussion_responses:
+                        _ = writer.writerow(entry)
+
+with open('api_data/course_discussions_responses.csv', mode='w', newline='',encoding='UTF-8') as file: 
+        writer = csv.DictWriter(file, fieldnames=["course_id", "discussion_topic_title","user_id","response"])
+        writer.writeheader()
+        for entry in discussion_responses:
+            _ = writer.writerow(entry)
+
+#Create template courses to go faster
+template_courses = []
+for course in courses:
+    course_name_without_term = str(course['long_name']).split(" - ")[1]
+    if course_name_without_term not in template_courses:
+        template_courses.append((course_name_without_term))
+
+with open('data/course_templates.csv', mode='w', newline='',encoding='UTF-8') as file: 
+        writer = csv.DictWriter(file, fieldnames=["course_id","short_name","long_name","account_id","term_id","start_date","end_date","status"])
+        writer.writeheader()
+        for entry in template_courses:
+            _ = writer.writerow({'course_id':f'TEMPLATE-{entry.replace(" ","").replace(":","").replace(",","")}',"short_name":f"TEMPLATE-{entry}","long_name":f"TEMPLATE-{entry}","account_id":"Templates","term_id":"Templates","start_date":"","end_date":"","status":"active"})
+
+template_courses = []
+with open(('data/course_templates.csv'), newline='') as f:
+    reader = csv.DictReader(f)
+    for templ in list(reader):
+        template_courses.append(templ["short_name"].replace("TEMPLATE-",""))
+#Remove characters that arn't numbers. It messes up the jSON
+import re
+template_quizzes = []
+for template in template_courses:
+    oresp = ollama.generate('phi3',f"Generate 3 quizzes for an LMS course called {re.sub(r'[^A-Za-z ]','',template)} with a two sentence summary of what it reviews as valid json. Use the keys quiz_title and quiz_description.")
+    arr = None
+    course_quizzes = []
+    tries = 0
+    while(arr == None and tries < 6):
+        try:
+            if oresp['done']:
+                resp = oresp['response']
+                arr = json.loads(resp)
+                for item in arr:
+                    course_quizzes.append({
+                        'course_id': template,
+                        'quiz_title': item['quiz_title'],
+                        'quiz_description': item['quiz_description'],
+                    })
+        except:
+            print(f'Failed to generate valid json for {template}')
+            tries += 1
+        template_quizzes += course_quizzes
+        if len(template_quizzes) % 5 == 0:
+            #Save
+            with open('api_data/quizzes.csv', mode='w', newline='',encoding='UTF-8') as file: 
+                writer = csv.DictWriter(file, fieldnames=["course_id","quiz_title","quiz_description"])
+                writer.writeheader()
+                for entry in template_quizzes:
+                    _ = writer.writerow(entry)
+with open('api_data/quizzes.csv', mode='w', newline='',encoding='UTF-8') as file: 
+    writer = csv.DictWriter(file, fieldnames=["course_id","quiz_title","quiz_description"])
+    writer.writeheader()
+    for entry in template_quizzes:
+        _ = writer.writerow(entry)
+
+template_quiz_questions = []
+for templ_quiz in template_quizzes:
+    num_of_questions = random.randint(2,3)
+    course_quiz_questions = []
+    for _ in range(num_of_questions):
+        try:
+            question_type = random.randint(1,2)
+            if question_type == 1:
+                oqresp = ollama.generate('phi3',f'Generate an essay question for a quiz called {templ_quiz["quiz_title"]} in the course {re.sub(r"[^A-Za-z ]","",templ_quiz["course_id"])}.')
+                course_quiz_questions.append({
+                    'course_id': templ_quiz['course_id'],
+                    'quiz_title': templ_quiz['quiz_title'],
+                    'quiz_question': oqresp['response'],
+                    'quiz_answers':'',
+                    'quiz_correct_answer':''
+                })
+            else:
+                oqresp = ollama.generate('phi3',f'Generate a multiple choice question for a quiz called {templ_quiz["quiz_title"]} in the course {re.sub(r"[^A-Za-z ]","",templ_quiz["course_id"])} as valid json with the answers listed as a semicolon seperated list, store the correct answer in correct_answer. Use the keys question, answers, and correct_answer')
+                qarr = json.loads(oqresp['response'])
+                for qqitem in qarr:
+                    course_quiz_questions.append({
+                        'course_id': templ_quiz['course_id'],
+                        'quiz_title': templ_quiz['quiz_title'],
+                        'quiz_question': qqitem['question'],
+                        'quiz_answers':qqitem['answers'],
+                        'quiz_correct_answer':qqitem['correct_answer']
+                    })
+        except:
+            print("Failed to generate questions")
+    template_quiz_questions += course_quiz_questions
+    if len(template_quiz_questions) % 5 == 0:
+        with open('api_data/quiz_questions.csv', mode='w', newline='',encoding='UTF-8') as file: 
+            writer = csv.DictWriter(file, fieldnames=["course_id","quiz_title","quiz_question","quiz_answers","quiz_correct_answer"])
+            writer.writeheader()
+            for entry in template_quiz_questions:
+                _ = writer.writerow(entry)
+
+with open('api_data/quiz_questions.csv', mode='w', newline='',encoding='UTF-8') as file: 
+    writer = csv.DictWriter(file, fieldnames=["course_id","quiz_title","quiz_question","quiz_answers","quiz_correct_answer"])
+    writer.writeheader()
+    for entry in template_quiz_questions:
+        _ = writer.writerow(entry)
 #Generate several pages per course
 
 #Generate a few assignments per course

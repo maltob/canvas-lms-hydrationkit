@@ -14,3 +14,4 @@ term_id,name,status,start_date,end_date
 2024NonCredit,2024NonCredit,active,2024-01-01 00:00:00,2024-12-31 00:00:00
 Teaching,Teaching,active,,
 Test,Test,deleted,,
+Templates,Templates,active,,
